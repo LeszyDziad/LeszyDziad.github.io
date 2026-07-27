@@ -574,6 +574,44 @@ async function addTracksToPlaylist(
 
 }
 
+async function fetchWithRetry(url, options, maxAttempts = 4) {
+
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+
+        const response = await fetch(url, options);
+
+        if (response.ok) {
+            return response;
+        }
+
+        const bodyText = await response.text();
+        lastError = new Error(bodyText);
+
+        // reccobeats.com bywa chwilowo niedostępne (błędy 5xx) - warto ponowić,
+        // zamiast od razu przerywać całą operację.
+        const isServerError = response.status >= 500;
+
+        if (!isServerError || attempt === maxAttempts) {
+            throw lastError;
+        }
+
+        const waitSeconds = Math.min(5 * attempt, 15);
+
+        console.warn(
+            `reccobeats.com: błąd ${response.status} (próba ${attempt}/${maxAttempts}). ` +
+            `Ponawiam za ${waitSeconds}s...`
+        );
+
+        await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+
+    }
+
+    throw lastError;
+
+}
+
 async function getAudioFeatures(trackIds) {
 
     const result = [];
@@ -594,7 +632,7 @@ async function getAudioFeatures(trackIds) {
         const targetUrl =
             "https://api.reccobeats.com/v1/audio-features?" + params.toString();
 
-        const response = await fetch(
+        const response = await fetchWithRetry(
             CORS_PROXY + encodeURIComponent(targetUrl),
             {
                 headers: {
@@ -602,12 +640,6 @@ async function getAudioFeatures(trackIds) {
                 }
             }
         );
-
-        if (!response.ok) {
-
-            throw new Error(await response.text());
-
-        }
 
         const json = await response.json();
 
