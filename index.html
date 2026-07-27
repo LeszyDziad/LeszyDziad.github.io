@@ -83,6 +83,15 @@ button:disabled{background:#3a3a3c;color:var(--muted);cursor:not-allowed}
     transition:width .3s ease;
 }
 #progressLabel{color:var(--muted);margin-top:10px;font-size:14px}
+#retryStatus{
+    margin-top:10px;
+    font-size:14px;
+    padding:10px 12px;
+    background:#241414;
+    border:1px solid var(--danger);
+    border-radius:6px;
+    line-height:1.5;
+}
 #resultText{font-size:15px}
 #resultText a{color:var(--accent)}
 .error-text{color:var(--danger)}
@@ -130,6 +139,7 @@ button:disabled{background:#3a3a3c;color:var(--muted);cursor:not-allowed}
 <section id="progressSection" class="card" hidden>
     <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
     <p id="progressLabel"></p>
+    <p id="retryStatus" hidden></p>
 </section>
 
 <section id="resultSection" class="card" hidden>
@@ -574,6 +584,79 @@ async function addTracksToPlaylist(
 
 }
 
+// ==================================================================
+// Komunikat o ponawianiu połączenia z reccobeats (widoczny dla użytkownika)
+// ==================================================================
+
+function updateRetryStatus(html) {
+
+    const el = document.getElementById("retryStatus");
+
+    if (!el) return;
+
+    el.hidden = false;
+    el.innerHTML = html;
+
+}
+
+function clearRetryStatus() {
+
+    const el = document.getElementById("retryStatus");
+
+    if (!el) return;
+
+    el.hidden = true;
+    el.innerHTML = "";
+
+}
+
+// Odlicza "totalSeconds" w dół, co sekundę aktualizując komunikat na ekranie,
+// i rozwiązuje obietnicę dopiero po zejściu do zera.
+function countdownAndWait(attempt, maxAttempts, totalSeconds) {
+
+    return new Promise(resolve => {
+
+        let remaining = Math.max(0, Math.round(totalSeconds));
+
+        const render = () => {
+
+            updateRetryStatus(
+                `<span class="error-text">API reccobeats jest aktualnie nieosiągalne, ` +
+                `istnieje szansa że witryna nie działa i będzie trzeba spróbować w innym czasie.</span><br>` +
+                `Spróbuję ponowić połączenie, próba ${attempt}/${maxAttempts}, ` +
+                `łączę za ${remaining}s...`
+            );
+
+        };
+
+        render();
+
+        if (remaining <= 0) {
+            resolve();
+            return;
+        }
+
+        const interval = setInterval(() => {
+
+            remaining--;
+
+            if (remaining <= 0) {
+
+                clearInterval(interval);
+                resolve();
+
+            } else {
+
+                render();
+
+            }
+
+        }, 1000);
+
+    });
+
+}
+
 async function fetchWithRetry(url, options, maxAttempts = 4) {
 
     let lastError = null;
@@ -583,15 +666,19 @@ async function fetchWithRetry(url, options, maxAttempts = 4) {
         const response = await fetch(url, options);
 
         if (response.ok) {
+            clearRetryStatus();
             return response;
         }
 
         const bodyText = await response.text();
         lastError = new Error(bodyText);
 
+        // reccobeats.com bywa chwilowo niedostępne (błędy 5xx) - warto ponowić,
+        // zamiast od razu przerywać całą operację.
         const isServerError = response.status >= 500;
 
         if (!isServerError || attempt === maxAttempts) {
+            clearRetryStatus();
             throw lastError;
         }
 
@@ -600,10 +687,13 @@ async function fetchWithRetry(url, options, maxAttempts = 4) {
         let waitSeconds = Math.min(5 * attempt, 15);
 
         try {
+
             const parsed = JSON.parse(bodyText);
+
             if (parsed.retry_after) {
                 waitSeconds = parsed.retry_after;
             }
+
         } catch {
             // body nie było JSON-em - zostaw domyślny backoff
         }
@@ -613,7 +703,7 @@ async function fetchWithRetry(url, options, maxAttempts = 4) {
             `Ponawiam za ${waitSeconds}s...`
         );
 
-        await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+        await countdownAndWait(attempt, maxAttempts, waitSeconds);
 
     }
 
@@ -1063,6 +1153,7 @@ async function runSort() {
     sortBtn.disabled = true;
 
     hideSection("resultSection");
+    clearRetryStatus();
     showSection("progressSection");
 
     try {
@@ -1186,6 +1277,8 @@ async function runSort() {
         console.error("FULL ERROR:");
         console.error(e);
         console.error(e.stack);
+
+        clearRetryStatus();
 
         document.getElementById("progressLabel").innerHTML =
             `<span class="error-text">Błąd: ${e.message}</span> (szczegóły w konsoli)`;
