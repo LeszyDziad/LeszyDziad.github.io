@@ -578,6 +578,11 @@ async function getAudioFeatures(trackIds) {
 
     const result = [];
 
+    // reccobeats.com nie wysyła nagłówka Access-Control-Allow-Origin dla domen
+    // spoza localhost, więc przeglądarka blokuje bezpośrednie zapytanie z GitHub Pages.
+    // Przepuszczamy je przez publiczny proxy CORS, który dokłada brakujący nagłówek.
+    const CORS_PROXY = "https://corsproxy.io/?url=";
+
     for (let i = 0; i < trackIds.length; i += 40) {
 
         const batch = trackIds.slice(i, i + 40);
@@ -586,8 +591,11 @@ async function getAudioFeatures(trackIds) {
             ids: batch.join(",")
         });
 
+        const targetUrl =
+            "https://api.reccobeats.com/v1/audio-features?" + params.toString();
+
         const response = await fetch(
-            "https://api.reccobeats.com/v1/audio-features?" + params.toString(),
+            CORS_PROXY + encodeURIComponent(targetUrl),
             {
                 headers: {
                     "Accept": "application/json"
