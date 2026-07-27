@@ -589,15 +589,24 @@ async function fetchWithRetry(url, options, maxAttempts = 4) {
         const bodyText = await response.text();
         lastError = new Error(bodyText);
 
-        // reccobeats.com bywa chwilowo niedostępne (błędy 5xx) - warto ponowić,
-        // zamiast od razu przerywać całą operację.
         const isServerError = response.status >= 500;
 
         if (!isServerError || attempt === maxAttempts) {
             throw lastError;
         }
 
-        const waitSeconds = Math.min(5 * attempt, 15);
+        // reccobeats/Cloudflare zwraca w body pole retry_after (w sekundach) -
+        // uszanuj je, jeśli jest; w przeciwnym razie wróć do starego backoffu.
+        let waitSeconds = Math.min(5 * attempt, 15);
+
+        try {
+            const parsed = JSON.parse(bodyText);
+            if (parsed.retry_after) {
+                waitSeconds = parsed.retry_after;
+            }
+        } catch {
+            // body nie było JSON-em - zostaw domyślny backoff
+        }
 
         console.warn(
             `reccobeats.com: błąd ${response.status} (próba ${attempt}/${maxAttempts}). ` +
